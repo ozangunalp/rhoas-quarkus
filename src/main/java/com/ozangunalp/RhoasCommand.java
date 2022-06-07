@@ -1,42 +1,58 @@
 package com.ozangunalp;
 
 import java.io.IOException;
-import java.nio.file.Path;
 import java.time.Duration;
-
-import javax.inject.Inject;
+import java.util.Objects;
 
 import org.keycloak.adapters.installed.KeycloakInstalled;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openshift.cloud.api.kas.DefaultApi;
+import com.openshift.cloud.api.kas.auth.TopicsApi;
+import com.openshift.cloud.api.kas.auth.models.NewTopicInput;
+import com.openshift.cloud.api.kas.auth.models.Topic;
 import com.openshift.cloud.api.kas.invoker.ApiClient;
 import com.openshift.cloud.api.kas.invoker.ApiException;
 import com.openshift.cloud.api.kas.invoker.Configuration;
 import com.openshift.cloud.api.kas.invoker.auth.HttpBearerAuth;
-import com.openshift.cloud.api.kas.models.KafkaRequestList;
+import com.openshift.cloud.api.kas.models.KafkaRequest;
+import com.openshift.cloud.api.kas.models.KafkaRequestPayload;
+
+import picocli.CommandLine;
 import picocli.CommandLine.Command;
-import picocli.CommandLine.Parameters;
 
 @Command(name = "rhoas", mixinStandardHelpOptions = true)
 public class RhoasCommand implements Runnable {
 
-    @Inject
-    ObjectMapper objectMapper;
-
     private static final Duration MIN_TOKEN_VALIDITY = Duration.ofSeconds(30);
+    private static final String API_CLIENT_BASE_PATH = "https://api.openshift.com";
 
-    @Parameters(paramLabel = "tokens-file", description = "File for storing obtained tokens.", defaultValue = "./tokens.json")
-    Path tokensPath;
+    ObjectMapper objectMapper = new ObjectMapper();
+
+    private static CommandParameters parameters = new CommandParameters();
+
+    private ApiClient defaultClient = getApiClient();
+    private DefaultApi apiInstance = new DefaultApi(defaultClient);
+    private TopicsApi apiInstanceTopic = new TopicsApi();
 
     @Override
     public void run() {
-        ApiClient defaultClient = getApiClient();
+        if(Objects.nonNull(parameters)){
+            if(Objects.nonNull(parameters.instanceName)){
+                System.out.println(createInstance(parameters.instanceName));
+            }
+            if(Objects.nonNull(parameters.instanceTopic)){
+                System.out.println(createInstanceTopic(parameters.instanceTopic));
+            }
+        } 
+    }
 
-        DefaultApi apiInstance = new DefaultApi(defaultClient);
+    private KafkaRequest createInstance(String name){
+        KafkaRequestPayload kafkaRequestPayload = new KafkaRequestPayload(); // KafkaRequestPayload | Kafka data
+        kafkaRequestPayload.setName(name);
+
         try {
-            KafkaRequestList result = apiInstance.getKafkas(null, null, "created_at", "");
-            System.out.println(result);
+            return apiInstance.createKafka(true, kafkaRequestPayload);
         } catch (ApiException e) {
             System.err.println("Exception when calling DefaultApi#createKafka");
             System.err.println("Status code: " + e.getCode());
@@ -44,21 +60,37 @@ public class RhoasCommand implements Runnable {
             System.err.println("Response headers: " + e.getResponseHeaders());
             e.printStackTrace();
         }
+
+        return null;
+    }
+
+    private Topic createInstanceTopic(String topicName){
+        NewTopicInput topicInput = new NewTopicInput();
+        topicInput.setName(topicName);
+
+        try {
+            return apiInstanceTopic.createTopic(topicInput);
+        } catch (com.openshift.cloud.api.kas.auth.invoker.ApiException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+
+        return null;
     }
 
     /**
      * From https://github.com/redhat-developer/app-services-sdk-java/tree/main/packages/kafka-management-sdk#getting-started
      */
     private ApiClient getApiClient() {
-        ApiClient defaultClient = Configuration.getDefaultApiClient();
-        defaultClient.setBasePath("https://api.openshift.com");
+        ApiClient apiClient = Configuration.getDefaultApiClient();
+        apiClient.setBasePath(API_CLIENT_BASE_PATH);
 
         String tokenString = getBearerToken();
 
         // Configure HTTP bearer authorization: Bearer
-        HttpBearerAuth Bearer = (HttpBearerAuth) defaultClient.getAuthentication("Bearer");
-        Bearer.setBearerToken(tokenString);
-        return defaultClient;
+        HttpBearerAuth bearer = (HttpBearerAuth) apiClient.getAuthentication("Bearer");
+        bearer.setBearerToken(tokenString);
+        return apiClient;
     }
 
     /**
@@ -99,16 +131,21 @@ public class RhoasCommand implements Runnable {
         long timeMillis = System.currentTimeMillis();
         rhoasTokens.refresh_expiration = timeMillis + keycloak.getTokenResponse().getRefreshExpiresIn() * 1000;
         rhoasTokens.access_expiration = timeMillis + keycloak.getTokenResponse().getExpiresIn() * 1000;
-        objectMapper.writeValue(tokensPath.toFile(), rhoasTokens);
+        objectMapper.writeValue(parameters.tokensPath.toFile(), rhoasTokens);
         return rhoasTokens;
     }
 
     RhoasTokens getStoredTokenResponse() {
         try {
-            return objectMapper.readValue(tokensPath.toFile(), RhoasTokens.class);
+            return objectMapper.readValue(parameters.tokensPath.toFile(), RhoasTokens.class);
         } catch (Exception e) {
             return null;
         }
     }
 
+    public static void main(String[] args) {
+        new CommandLine(parameters).parseArgs(args);
+        RhoasCommand rhoasCommand = new RhoasCommand();
+        rhoasCommand.run();
+    }
 }
